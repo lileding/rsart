@@ -1,0 +1,8 @@
+[package]
+name = "rsasync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2.155"
+mio = { version="1.0.0", features=["os-poll", "os-ext", "net"] }
