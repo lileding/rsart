@@ -5,7 +5,7 @@ use std::task::{Context, Wake, Poll};
 
 use super::task::{Task, Waker};
 
-use log::{debug, trace};
+use log::trace;
 
 pub(crate) struct Scheduler {
     current_taskid: AtomicUsize,
@@ -16,7 +16,7 @@ pub(crate) struct Scheduler {
 impl Scheduler {
     pub(crate) fn new() -> Self {
         Scheduler {
-            current_taskid: AtomicUsize::new(0),
+            current_taskid: AtomicUsize::new(1),
             active_tasks: Mutex::new(VecDeque::new()),
             pending_tasks: Mutex::new(HashMap::new()),
         }
@@ -67,13 +67,13 @@ impl Scheduler {
     }
 
     pub(crate) fn activate(&self, task: Task) {
-        debug!("[Scheduler] activate task, tid={}", task.id());
+        trace!("[Scheduler] activate task, tid={}", task.id());
         self.pending_tasks.lock().unwrap().remove(&task.id());
         self.active_tasks.lock().unwrap().push_back(task);
     }
 
     pub(crate) fn wake_by_id(&self, taskid: usize) {
-        debug!("[Scheduler] wake_by_id, tid={}", taskid);
+        trace!("[Scheduler] wake_by_id, tid={}", taskid);
         let mut lock = self.pending_tasks.lock().unwrap();
         let waker = lock.remove(&taskid).take();
         drop(lock);

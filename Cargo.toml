@@ -1,9 +1,10 @@
 [package]
-name = "rsasync"
+name = "rsart"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+rsart_macros = { path="./rsart-macros" }
 env_logger = "0.11.3"
 libc = "0.2.155"
 log = "0.4.22"

@@ -18,7 +18,7 @@ compile_error!("timerfd is a linux specific feature");
 
 /// A timerfd which can be used to create mio-compatible
 /// timers on linux targets.
-pub struct TimerFd {
+pub(crate) struct TimerFd {
     fd: c_int,
 }
 
@@ -26,13 +26,13 @@ impl TimerFd {
     /// Create a new timerfd using the given clock; if you're not sure
     /// what clock to use read timerfd(7) for more details, or know
     /// that `ClockId::Monotonic` is a good default for most programs.
-    pub fn new(clockid: ClockId) -> io::Result<Self> {
+    pub(crate) fn new(clockid: ClockId) -> io::Result<Self> {
         let flags = libc::TFD_NONBLOCK | libc::TFD_CLOEXEC;
         Self::create(clockid.into(), flags)
     }
 
     /// Set a single timeout to occur after the specified duration.
-    pub fn set_timeout(&mut self, timeout: &Duration) -> io::Result<()> {
+    pub(crate) fn set_timeout(&mut self, timeout: &Duration) -> io::Result<()> {
         // this is overflow safe unless the timeout is > sizeof(long) seconds,
         // which is a healthy ~68 years for 32 bit or ~2 billion years for 64 bit.
         let new_value = libc::itimerspec {
@@ -50,7 +50,8 @@ impl TimerFd {
 
     /// Set a timeout to occur at each interval of the
     /// specified duration from this point in time forward.
-    pub fn set_timeout_interval(&mut self, timeout: &Duration) -> io::Result<()> {
+    #[allow(dead_code)]
+    pub(crate) fn set_timeout_interval(&mut self, timeout: &Duration) -> io::Result<()> {
         // this is overflow safe unless the timoeout is > ~292 billion years.
         let new_value = libc::itimerspec {
             it_interval: libc::timespec {
@@ -67,7 +68,8 @@ impl TimerFd {
 
     /// Unset any existing timeouts on the timer,
     /// making this timerfd inert until rearmed.
-    pub fn disarm(&mut self) -> io::Result<()> {
+    #[allow(dead_code)]
+    pub(crate) fn disarm(&mut self) -> io::Result<()> {
         self.set_timeout(&Duration::from_secs(0))
     }
 
@@ -80,7 +82,8 @@ impl TimerFd {
     /// Failing to call this after this timerfd causes a wakeup
     /// will result in immediately re-waking on this timerfd if
     /// level polling, or never re-waking if edge polling.
-    pub fn read(&self) -> io::Result<u64> {
+    #[allow(dead_code)]
+    pub(crate) fn read(&self) -> io::Result<u64> {
         let mut buf = [0u8; 8];
         let ret = unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
         if ret == 8 {
@@ -103,7 +106,7 @@ impl TimerFd {
     /// Note that this library may cause the thread to block when
     /// `TimerFd::read` is called if the `TFD_NONBLOCK` flag is
     /// not included in the flags.
-    pub fn create(clockid: c_int, flags: c_int) -> io::Result<Self> {
+    pub(crate) fn create(clockid: c_int, flags: c_int) -> io::Result<Self> {
         let fd = unsafe { libc::timerfd_create(clockid, flags) };
         if fd == -1 {
             Err(io::Error::last_os_error())
@@ -115,7 +118,7 @@ impl TimerFd {
     /// Wrapper of `timerfd_settime` from timerfd_create(7); For most
     /// users it's probably easier to use the `TimerFd::set_timeout` or
     /// the `TimerFd::set_timeout_interval` functions.
-    pub fn settime(
+    pub(crate) fn settime(
         &mut self,
         flags: c_int,
         new_value: &libc::itimerspec,
@@ -132,7 +135,8 @@ impl TimerFd {
     }
 
     /// Wrapper of `timerfd_gettime` from timerfd_create(7)
-    pub fn gettime(&self) -> io::Result<libc::itimerspec> {
+    #[allow(dead_code)]
+    pub(crate) fn gettime(&self) -> io::Result<libc::itimerspec> {
         let mut old_spec_mem = MaybeUninit::<libc::itimerspec>::uninit();
         let ret = unsafe { libc::timerfd_gettime(self.fd, old_spec_mem.as_mut_ptr()) };
         if ret == -1 {
@@ -187,8 +191,9 @@ impl Drop for TimerFd {
 //
 
 /// Clock used to mark the progress of the timer. timerfd_create(7)
+#[allow(dead_code)]
 #[derive(Copy, Clone)]
-pub enum ClockId {
+pub(crate) enum ClockId {
     RealTime,
     Monotonic,
     BootTime,

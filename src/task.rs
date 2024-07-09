@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::Runtime;
 
-use log::{debug, trace};
+use log::trace;
 
 pub(crate) struct Task {
     id: usize,
@@ -44,10 +44,8 @@ impl Waker {
 impl Wake for Waker {
     fn wake(self: Arc<Self>) {
         if let Some(task) = self.0.lock().unwrap().take() {
-            debug!("[Waker] wake task, tid={}", task.id);
+            trace!("[Waker] wake task, tid={}", task.id);
             Runtime::current().scheduler.activate(task);
-        } else {
-            panic!("[Waker] wake task with no task");
         }
     }
 }

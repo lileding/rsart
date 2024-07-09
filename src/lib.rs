@@ -4,19 +4,21 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::future::Future;
 use std::task::{Context, Poll, Wake, Waker};
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::time::Duration;
 
 use self::executor::Executor;
 use self::scheduler::Scheduler;
 use self::timer::TimerFd;
 
-use log::debug;
+use log::trace;
 
 mod timer;
 mod task;
 mod executor;
 mod scheduler;
+
+pub use rsart_macros::main;
 
 pub struct Runtime {
     next_taskid: AtomicUsize,
@@ -37,20 +39,19 @@ impl Runtime {
         CONTEXT.with_borrow(Arc::clone)
     }
 
-    fn block_on<F>(&self, task: F) -> F::Output where
-        F: Future + Send + 'static, F::Output: Send + 'static {
-        let rv = self.spawn(task);
+    fn block_on<F: Future>(&self, task: F) -> F::Output {
+        let mut ptask = pin!(task);
+        let task_waker = task::Waker::new();
+        let waker = Arc::clone(&task_waker).into();
+        let mut cx = Context::from_waker(&waker);
 
         loop {
-            let scheduler_complete = self.scheduler.schedule();
-            let executor_complete = self.executor.execute().unwrap();
-            if scheduler_complete && executor_complete {
-                break;
+            let rv = ptask.as_mut().poll(&mut cx);
+            self.run();
+            if let Poll::Ready(rv) = rv {
+                return rv;
             }
         }
-
-        let mut lock = rv.0.lock().unwrap();
-        lock.take().unwrap()
     }
 
     pub fn spawn<F>(&self, task: F) -> JoinHandle<F::Output> where
@@ -60,8 +61,18 @@ impl Runtime {
         let handle = wrapper.join();
         let task = task::Task::new(tid, wrapper);
         self.scheduler.activate(task);
-        debug!("[Spawner] new task, id={}", tid);
+        trace!("[Spawner] new task, id={}", tid);
         handle
+    }
+
+    fn run(&self) {
+        loop {
+            let scheduler_complete = self.scheduler.schedule();
+            let executor_complete = self.executor.execute().unwrap();
+            if scheduler_complete && executor_complete {
+                break;
+            }
+        }
     }
 
     fn sleep(&self, duration: Duration) -> Result<SleepFuture> {
@@ -77,8 +88,7 @@ impl Runtime {
     }
 }
 
-pub fn block_on<F>(task: F) -> F::Output where
-    F: Future + Send + 'static, F::Output: Send + 'static {
+pub fn block_on<F: Future>(task: F) -> F::Output {
     Runtime::current().block_on(task)
 }
 
@@ -135,8 +145,8 @@ impl Wake for SleepWaker {
 struct TaskWrapper<F> where F: Future + Send + 'static, F::Output: Send + 'static {
     id: usize,
     parent_id: usize,
-    task: Mutex<Pin<Box<F>>>,
-    result: Arc<Mutex<Option<F::Output>>>,
+    task: Pin<Box<F>>,
+    result: JoinHandle<F::Output>,
 }
 
 impl <F> TaskWrapper<F> where F: Future + Send + 'static, F::Output: Send + 'static {
@@ -144,13 +154,13 @@ impl <F> TaskWrapper<F> where F: Future + Send + 'static, F::Output: Send + 'sta
         TaskWrapper {
             id,
             parent_id,
-            task: Mutex::new(Box::pin(task)),
-            result: Arc::new(Mutex::new(None)),
+            task: Box::pin(task),
+            result: JoinHandle::new(),
         }
     }
 
     fn join(&self) -> JoinHandle<F::Output> {
-        JoinHandle(Arc::clone(&self.result))
+        self.result.clone()
     }
 }
 
@@ -158,16 +168,16 @@ impl <F> Future for TaskWrapper<F> where
 F: Future + Send + 'static, F::Output: Send + 'static {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.task.lock().unwrap().as_mut().poll(cx) {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.task.as_mut().poll(cx) {
             Poll::Ready(rv) => {
-                debug!("[TaskWrapper] task ready and wake parent, tid={} parent={}", self.id, self.parent_id);
-                self.result.lock().unwrap().replace(rv);
+                trace!("[TaskWrapper] task ready and wake parent, tid={} parent={}", self.id, self.parent_id);
+                self.result.set_value(rv);
                 Runtime::current().scheduler.wake_by_id(self.parent_id);
                 Poll::Ready(())
             },
             Poll::Pending => {
-                debug!("[TaskWrapper] task not ready, tid={}", self.id);
+                trace!("[TaskWrapper] task not ready, tid={}", self.id);
                 Poll::Pending
             },
         }
@@ -176,22 +186,33 @@ F: Future + Send + 'static, F::Output: Send + 'static {
 
 pub struct JoinHandle<T>(Arc<Mutex<Option<T>>>);
 
+impl <T> JoinHandle<T> {
+    fn new() -> Self {
+        JoinHandle(Arc::new(Mutex::new(None)))
+    }
+
+    fn take_value(&self) -> Option<T> {
+        self.0.lock().unwrap().take()
+    }
+
+    fn set_value(&self, value: T) -> Option<T> {
+        self.0.lock().unwrap().replace(value)
+    }
+}
+
+impl <T> Clone for JoinHandle<T> {
+    fn clone(&self) -> Self {
+        JoinHandle(self.0.clone())
+    }
+}
+
 impl <T> Future for JoinHandle<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        //debug!("[JoinHandle] poll, tid={}", self.0);
-        match self.0.lock().unwrap().take() {
-            Some(rv) => {
-                //debug!("[JoinHandle] ready, tid={}", self.0);
-                //cx.waker().wake_by_ref();
-                Poll::Ready(rv)
-            },
-            None => {
-                //debug!("[JoinHandle] not ready, tid={}", self.0);
-                //cx.waker().wake_by_ref();
-                Poll::Pending
-            },
+        match self.take_value() {
+            Some(rv) => Poll::Ready(rv),
+            None => Poll::Pending,
         }
     }
 }
